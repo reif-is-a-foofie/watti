@@ -1,0 +1,33 @@
+name: Release (macOS)
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build app
+        run: ./build.sh
+
+      - name: Ad-hoc sign app (no certificate)
+        run: |
+          codesign --force --deep --sign - "build/Watti.app"
+
+      - name: Zip app
+        run: |
+          ditto -c -k --sequesterRsrc --keepParent "build/Watti.app" "Watti-macos.zip"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: Watti-macos.zip
+
