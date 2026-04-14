@@ -1,4 +1,5 @@
 #import <Cocoa/Cocoa.h>
+#import <CoreServices/CoreServices.h>
 #import <IOKit/ps/IOPSKeys.h>
 #import <IOKit/ps/IOPowerSources.h>
 #import <IOKit/IOKitLib.h>
@@ -119,6 +120,97 @@ static NSString *WNTimestampString(void) {
 static NSFont *WNUIFont(CGFloat size, NSFontWeight weight) {
     return [NSFont systemFontOfSize:size weight:weight];
 }
+
+static void WNPinLeftRowLabelWidth(NSControl *field) {
+    if (field == nil) {
+        return;
+    }
+    [field setContentCompressionResistancePriority:NSLayoutPriorityRequired forOrientation:NSLayoutConstraintOrientationHorizontal];
+}
+
+static void WNAllowValueToTruncateHorizontally(NSControl *field) {
+    if (field == nil) {
+        return;
+    }
+    [field setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow forOrientation:NSLayoutConstraintOrientationHorizontal];
+}
+
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+
+static BOOL WNLoginItemURLMatchesItem(LSSharedFileListItemRef item, NSURL *targetURL) {
+    CFErrorRef error = NULL;
+    CFURLRef resolved = LSSharedFileListItemCopyResolvedURL(item, 0, &error);
+    if (resolved == NULL) {
+        if (error != NULL) {
+            CFRelease(error);
+        }
+        return NO;
+    }
+    NSURL *resolvedURL = CFBridgingRelease(resolved);
+    return [resolvedURL isEqual:targetURL] || [resolvedURL.path isEqualToString:targetURL.path];
+}
+
+static BOOL WNLoginItemEnabled(void) {
+    NSURL *appURL = NSBundle.mainBundle.bundleURL;
+    LSSharedFileListRef list = LSSharedFileListCreate(kCFAllocatorDefault, kLSSharedFileListSessionLoginItems, NULL);
+    if (list == NULL) {
+        return NO;
+    }
+    CFArrayRef snapshot = LSSharedFileListCopySnapshot(list, NULL);
+    CFRelease(list);
+    if (snapshot == NULL) {
+        return NO;
+    }
+    BOOL found = NO;
+    CFIndex count = CFArrayGetCount(snapshot);
+    for (CFIndex i = 0; i < count; i++) {
+        LSSharedFileListItemRef item = (LSSharedFileListItemRef)CFArrayGetValueAtIndex(snapshot, i);
+        if (WNLoginItemURLMatchesItem(item, appURL)) {
+            found = YES;
+            break;
+        }
+    }
+    CFRelease(snapshot);
+    return found;
+}
+
+static BOOL WNSetLoginItemEnabled(BOOL enabled) {
+    NSURL *appURL = NSBundle.mainBundle.bundleURL;
+    LSSharedFileListRef list = LSSharedFileListCreate(kCFAllocatorDefault, kLSSharedFileListSessionLoginItems, NULL);
+    if (list == NULL) {
+        return NO;
+    }
+    BOOL ok = YES;
+    if (enabled) {
+        if (!WNLoginItemEnabled()) {
+            LSSharedFileListItemRef inserted = LSSharedFileListInsertItemURL(list, kLSSharedFileListItemLast, NULL, NULL, (__bridge CFURLRef)appURL, NULL, NULL);
+            if (inserted == NULL) {
+                ok = NO;
+            }
+        }
+    } else {
+        CFArrayRef snapshot = LSSharedFileListCopySnapshot(list, NULL);
+        if (snapshot != NULL) {
+            CFIndex count = CFArrayGetCount(snapshot);
+            for (CFIndex i = 0; i < count; i++) {
+                LSSharedFileListItemRef item = (LSSharedFileListItemRef)CFArrayGetValueAtIndex(snapshot, i);
+                if (WNLoginItemURLMatchesItem(item, appURL)) {
+                    OSStatus status = LSSharedFileListItemRemove(list, item);
+                    if (status != noErr) {
+                        ok = NO;
+                    }
+                    break;
+                }
+            }
+            CFRelease(snapshot);
+        }
+    }
+    CFRelease(list);
+    return ok;
+}
+
+#pragma clang diagnostic pop
 
 static void WNMaybeMigrateLegacyFolders(void) {
     NSFileManager *fm = [NSFileManager defaultManager];
@@ -940,101 +1032,17 @@ static NSImage *WNBrandMarkImage(BOOL onPower, BOOL charging) {
 
 @end
 
-@interface MonitoringToggleControl : NSControl
-@property(nonatomic) BOOL on;
-@property(nonatomic, strong) NSTextField *labelField;
-@property(nonatomic, strong) NSView *knobView;
-- (void)setOn:(BOOL)on animated:(BOOL)animated;
-@end
-
-@implementation MonitoringToggleControl
-
-- (instancetype)initWithFrame:(NSRect)frameRect {
-    self = [super initWithFrame:frameRect];
-    if (self == nil) {
-        return nil;
-    }
-
-    self.wantsLayer = YES;
-    self.layer.cornerRadius = 12;
-    self.layer.borderWidth = 1;
-    self.layer.borderColor = WNColor(0.0, 0.0, 0.0, 0.08).CGColor;
-
-    self.labelField = [NSTextField labelWithString:@"ON"];
-    self.labelField.translatesAutoresizingMaskIntoConstraints = NO;
-    self.labelField.font = [NSFont systemFontOfSize:9 weight:NSFontWeightSemibold];
-    self.labelField.alignment = NSTextAlignmentCenter;
-    [self addSubview:self.labelField];
-
-    self.knobView = [[NSView alloc] initWithFrame:NSZeroRect];
-    self.knobView.translatesAutoresizingMaskIntoConstraints = NO;
-    self.knobView.wantsLayer = YES;
-    self.knobView.layer.cornerRadius = 7;
-    self.knobView.layer.shadowColor = NSColor.blackColor.CGColor;
-    self.knobView.layer.shadowOpacity = 0.12;
-    self.knobView.layer.shadowRadius = 2;
-    self.knobView.layer.shadowOffset = CGSizeMake(0, -1);
-    [self addSubview:self.knobView];
-
-    [NSLayoutConstraint activateConstraints:@[
-        [self.widthAnchor constraintEqualToConstant:52],
-        [self.heightAnchor constraintEqualToConstant:20],
-        [self.labelField.centerYAnchor constraintEqualToAnchor:self.centerYAnchor],
-        [self.labelField.leadingAnchor constraintEqualToAnchor:self.leadingAnchor constant:7],
-        [self.labelField.trailingAnchor constraintEqualToAnchor:self.trailingAnchor constant:-7],
-        [self.knobView.widthAnchor constraintEqualToConstant:14],
-        [self.knobView.heightAnchor constraintEqualToConstant:14],
-        [self.knobView.centerYAnchor constraintEqualToAnchor:self.centerYAnchor],
-    ]];
-
-    [self setOn:YES animated:NO];
-    return self;
-}
-
-- (void)mouseDown:(NSEvent *)event {
-    (void)event;
-    [self setOn:!self.on animated:YES];
-    [self sendAction:self.action to:self.target];
-}
-
-- (void)setOn:(BOOL)on {
-    [self setOn:on animated:NO];
-}
-
-- (void)setOn:(BOOL)on animated:(BOOL)animated {
-    _on = on;
-
-    CGFloat inset = 3;
-    CGFloat knobWidth = 14;
-    CGFloat knobX = on ? (NSWidth(self.bounds) - knobWidth - inset) : inset;
-    NSRect knobFrame = NSMakeRect(knobX, inset, knobWidth, knobWidth);
-
-    self.layer.backgroundColor = on ? WNColor(0.90, 0.95, 1.0, 1.0).CGColor : WNColor(0.92, 0.92, 0.93, 1.0).CGColor;
-    self.layer.borderColor = on ? WNColor(0.74, 0.84, 0.98, 1.0).CGColor : WNColor(0.0, 0.0, 0.0, 0.08).CGColor;
-    self.labelField.stringValue = on ? @"ON" : @"OFF";
-    self.labelField.textColor = on ? WNColor(0.16, 0.43, 0.86, 1.0) : WNColor(0.48, 0.49, 0.52, 1.0);
-    self.labelField.alignment = on ? NSTextAlignmentLeft : NSTextAlignmentRight;
-    self.knobView.layer.backgroundColor = NSColor.whiteColor.CGColor;
-
-    if (animated) {
-        [NSAnimationContext runAnimationGroup:^(NSAnimationContext *context) {
-            context.duration = 0.16;
-            context.timingFunction = [CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionEaseInEaseOut];
-            self.knobView.animator.frame = knobFrame;
-        } completionHandler:nil];
-    } else {
-        self.knobView.frame = knobFrame;
-    }
-}
-
-@end
-
-@interface PowerNoteView : NSView
+@interface WattiPowerView : NSView
 @property(nonatomic, strong) RollingWattsView *wattsView;
 @property(nonatomic, strong) NSTextField *subtitleLabel;
 @property(nonatomic, strong) NSTextField *captionLabel;
 @property(nonatomic, strong) NSLayoutConstraint *captionHeightConstraint;
 @property(nonatomic, strong) NSTextField *brandLabel;
+@property(nonatomic, strong) CAGradientLayer *brandBaseLayer;
+@property(nonatomic, strong) CAGradientLayer *brandHighlightLayer;
+@property(nonatomic, strong) CATextLayer *brandTextMask;
+@property(nonatomic, strong) NSButton *settingsButton;
+@property(nonatomic, strong) NSButton *closeButton;
 @property(nonatomic, strong) NSTextField *chargerNameLabel;
 @property(nonatomic, strong) NSTextField *chargerNameValueLabel;
 @property(nonatomic, strong) NSTextField *runtimeLabel;
@@ -1042,12 +1050,146 @@ static NSImage *WNBrandMarkImage(BOOL onPower, BOOL charging) {
 @property(nonatomic, strong) NSTextField *batteryValueLabel;
 @property(nonatomic, strong) NSTextField *timeToFullValueLabel;
 @property(nonatomic, strong) NSTextField *chargerValueLabel;
-@property(nonatomic, strong) MonitoringToggleControl *monitoringToggle;
-@property(nonatomic, copy) void (^monitoringChanged)(BOOL enabled);
+@property(nonatomic, copy) void (^closeRequested)(void);
+@property(nonatomic, copy) void (^settingsRequested)(void);
 - (void)applySnapshot:(PowerSnapshot *)snapshot monitoringEnabled:(BOOL)monitoringEnabled samples:(NSArray<NSNumber *> *)samples;
 @end
 
-@implementation PowerNoteView
+@implementation WattiPowerView
+
+- (void)layout {
+    [super layout];
+
+    if (self.brandBaseLayer == nil || self.brandHighlightLayer == nil || self.brandTextMask == nil || self.brandLabel.layer == nil) {
+        return;
+    }
+
+    CGRect bounds = self.brandLabel.bounds;
+    CGFloat width = CGRectGetWidth(bounds);
+    CGFloat height = CGRectGetHeight(bounds);
+    if (width <= 1 || height <= 1) {
+        return;
+    }
+
+    self.brandTextMask.frame = bounds;
+    self.brandBaseLayer.frame = bounds;
+    self.brandHighlightLayer.frame = CGRectMake(-width, 0, width * 2.0, height);
+}
+
+- (void)installBrandMetalText {
+    if (self.brandLabel.layer == nil || self.brandBaseLayer != nil) {
+        return;
+    }
+
+    self.brandLabel.layer.masksToBounds = NO;
+
+    CGFloat scale = NSScreen.mainScreen.backingScaleFactor;
+    if (scale <= 0) {
+        scale = 2.0;
+    }
+
+    CATextLayer *mask = [CATextLayer layer];
+    mask.contentsScale = scale;
+    mask.string = self.brandLabel.stringValue ?: @"";
+    mask.alignmentMode = kCAAlignmentLeft;
+    mask.truncationMode = kCATruncationEnd;
+    mask.wrapped = NO;
+    mask.foregroundColor = NSColor.whiteColor.CGColor;
+    mask.frame = self.brandLabel.bounds;
+
+    NSFont *font = self.brandLabel.font ?: WNUIFont(16, NSFontWeightSemibold);
+    CGFontRef cgFont = CGFontCreateWithFontName((__bridge CFStringRef)font.fontName);
+    if (cgFont != NULL) {
+        mask.font = cgFont;
+        CGFontRelease(cgFont);
+    } else {
+        mask.font = (__bridge CFTypeRef)(font);
+    }
+    mask.fontSize = font.pointSize;
+
+    // Base “metal” fill.
+    CAGradientLayer *base = [CAGradientLayer layer];
+    base.startPoint = CGPointMake(0.0, 0.0);
+    base.endPoint = CGPointMake(0.0, 1.0);
+    base.colors = @[
+        (id)WNColor(0.05, 0.78, 0.24, 1.0).CGColor,
+        (id)WNColor(0.30, 0.92, 0.44, 1.0).CGColor,
+        (id)WNColor(0.03, 0.62, 0.18, 1.0).CGColor,
+    ];
+    base.locations = @[ @0.0, @0.55, @1.0 ];
+    base.frame = self.brandLabel.bounds;
+
+    // Moving specular highlight (masked to text).
+    CAGradientLayer *highlight = [CAGradientLayer layer];
+    highlight.startPoint = CGPointMake(0.0, 0.0);
+    highlight.endPoint = CGPointMake(1.0, 1.0);
+    highlight.colors = @[
+        (id)NSColor.clearColor.CGColor,
+        (id)[NSColor.whiteColor colorWithAlphaComponent:0.10].CGColor,
+        (id)[NSColor.whiteColor colorWithAlphaComponent:0.95].CGColor,
+        (id)[NSColor.whiteColor colorWithAlphaComponent:0.10].CGColor,
+        (id)NSColor.clearColor.CGColor,
+    ];
+    highlight.locations = @[ @0.0, @0.40, @0.50, @0.60, @1.0 ];
+    highlight.opacity = 0.55;
+    highlight.compositingFilter = @"screenBlendMode";
+    highlight.frame = CGRectMake(-CGRectGetWidth(self.brandLabel.bounds), 0, CGRectGetWidth(self.brandLabel.bounds) * 2.0, CGRectGetHeight(self.brandLabel.bounds));
+
+    // Single text render: hide the NSTextField ink, let layers provide the fill.
+    self.brandLabel.textColor = NSColor.clearColor;
+
+    CALayer *container = self.brandLabel.layer;
+    container.mask = mask;
+    [container addSublayer:base];
+    [container addSublayer:highlight];
+
+    self.brandTextMask = mask;
+    self.brandBaseLayer = base;
+    self.brandHighlightLayer = highlight;
+
+    CABasicAnimation *move = [CABasicAnimation animationWithKeyPath:@"position.x"];
+    move.fromValue = @(-CGRectGetWidth(self.brandLabel.bounds) * 0.8);
+    move.toValue = @(CGRectGetWidth(self.brandLabel.bounds) * 1.8);
+    move.duration = 1.45;
+    move.repeatCount = HUGE_VALF;
+    move.autoreverses = NO;
+    move.timingFunction = [CAMediaTimingFunction functionWithControlPoints:0.20 :0.85 :0.20 :1.00];
+    move.removedOnCompletion = NO;
+    [highlight addAnimation:move forKey:@"wn_brand_highlight"];
+}
+
+- (NSButton *)makeIconButtonWithSymbol:(NSString *)symbolName tooltip:(NSString *)tooltip action:(SEL)action {
+    NSButton *button = [NSButton buttonWithTitle:@"" target:self action:action];
+    button.translatesAutoresizingMaskIntoConstraints = NO;
+    button.bordered = NO;
+    button.bezelStyle = NSBezelStyleTexturedRounded;
+    button.toolTip = tooltip;
+    button.contentTintColor = WNColor(0.30, 0.33, 0.38, 1.0);
+
+    NSImage *symbol = [NSImage imageWithSystemSymbolName:symbolName accessibilityDescription:tooltip];
+    if (symbol != nil) {
+        NSImageSymbolConfiguration *config = [NSImageSymbolConfiguration configurationWithPointSize:12 weight:NSFontWeightSemibold];
+        button.image = [symbol imageWithSymbolConfiguration:config] ?: symbol;
+    } else {
+        button.image = symbol;
+    }
+
+    return button;
+}
+
+- (void)settingsPressed:(id)sender {
+    (void)sender;
+    if (self.settingsRequested != nil) {
+        self.settingsRequested();
+    }
+}
+
+- (void)closePressed:(id)sender {
+    (void)sender;
+    if (self.closeRequested != nil) {
+        self.closeRequested();
+    }
+}
 
 - (instancetype)initWithFrame:(NSRect)frameRect {
     self = [super initWithFrame:frameRect];
@@ -1066,13 +1208,22 @@ static NSImage *WNBrandMarkImage(BOOL onPower, BOOL charging) {
                                      weight:NSFontWeightSemibold
                                       color:WNColor(0.31, 0.25, 0.19, 1.0)];
     self.brandLabel.wantsLayer = YES;
+    self.brandLabel.maximumNumberOfLines = 1;
+    [self.brandLabel setContentCompressionResistancePriority:NSLayoutPriorityRequired forOrientation:NSLayoutConstraintOrientationHorizontal];
+    [self.brandLabel setContentCompressionResistancePriority:NSLayoutPriorityRequired forOrientation:NSLayoutConstraintOrientationVertical];
+    [self.brandLabel setContentHuggingPriority:NSLayoutPriorityRequired forOrientation:NSLayoutConstraintOrientationHorizontal];
+    NSFontDescriptor *descriptor = [self.brandLabel.font.fontDescriptor fontDescriptorWithDesign:NSFontDescriptorSystemDesignRounded];
+    if (descriptor != nil) {
+        self.brandLabel.font = [NSFont fontWithDescriptor:descriptor size:16.0] ?: self.brandLabel.font;
+    }
     [self addSubview:self.brandLabel];
+    [self installBrandMetalText];
 
-    self.monitoringToggle = [[MonitoringToggleControl alloc] initWithFrame:NSZeroRect];
-    self.monitoringToggle.translatesAutoresizingMaskIntoConstraints = NO;
-    self.monitoringToggle.target = self;
-    self.monitoringToggle.action = @selector(monitoringToggleChanged:);
-    [self addSubview:self.monitoringToggle];
+    self.closeButton = [self makeIconButtonWithSymbol:@"xmark" tooltip:@"Close" action:@selector(closePressed:)];
+    [self addSubview:self.closeButton];
+
+    self.settingsButton = [self makeIconButtonWithSymbol:@"gearshape" tooltip:@"Settings" action:@selector(settingsPressed:)];
+    [self addSubview:self.settingsButton];
 
     self.wattsView = [[RollingWattsView alloc] initWithFrame:NSZeroRect];
     self.wattsView.translatesAutoresizingMaskIntoConstraints = NO;
@@ -1083,7 +1234,10 @@ static NSImage *WNBrandMarkImage(BOOL onPower, BOOL charging) {
                                         weight:NSFontWeightSemibold
                                          color:WNColor(0.16, 0.13, 0.11, 1.0)];
     self.subtitleLabel.alignment = NSTextAlignmentRight;
+    self.subtitleLabel.maximumNumberOfLines = 1;
+    self.subtitleLabel.cell.wraps = NO;
     [self addSubview:self.subtitleLabel];
+    WNAllowValueToTruncateHorizontally(self.subtitleLabel);
 
     self.captionLabel = [self labelWithString:@"Waiting for telemetry"
                                          size:10
@@ -1095,11 +1249,12 @@ static NSImage *WNBrandMarkImage(BOOL onPower, BOOL charging) {
     NSColor *rowLabelColor = WNColor(0.43, 0.47, 0.52, 1.0);
     NSColor *rowValueColor = WNColor(0.16, 0.13, 0.11, 1.0);
 
-    self.chargerNameLabel = [self labelWithString:@"Charger"
+    self.chargerNameLabel = [self labelWithString:@"Current Charger"
                                              size:11
                                            weight:NSFontWeightRegular
                                             color:rowLabelColor];
     [self addSubview:self.chargerNameLabel];
+    WNPinLeftRowLabelWidth(self.chargerNameLabel);
 
     self.chargerNameValueLabel = [self labelWithString:@"--"
                                                   size:11
@@ -1107,18 +1262,21 @@ static NSImage *WNBrandMarkImage(BOOL onPower, BOOL charging) {
                                                  color:rowValueColor];
     self.chargerNameValueLabel.alignment = NSTextAlignmentRight;
     [self addSubview:self.chargerNameValueLabel];
+    WNAllowValueToTruncateHorizontally(self.chargerNameValueLabel);
 
     NSTextField *sourceLabel = [self labelWithString:@"Power Source"
                                                 size:11
                                               weight:NSFontWeightRegular
                                                color:rowLabelColor];
     [self addSubview:sourceLabel];
+    WNPinLeftRowLabelWidth(sourceLabel);
 
     self.runtimeLabel = [self labelWithString:@"Predicted Runtime"
                                          size:11
                                        weight:NSFontWeightRegular
                                         color:rowLabelColor];
     [self addSubview:self.runtimeLabel];
+    WNPinLeftRowLabelWidth(self.runtimeLabel);
 
     self.runtimeValueLabel = [self labelWithString:@"--"
                                               size:11
@@ -1126,12 +1284,14 @@ static NSImage *WNBrandMarkImage(BOOL onPower, BOOL charging) {
                                              color:rowValueColor];
     self.runtimeValueLabel.alignment = NSTextAlignmentRight;
     [self addSubview:self.runtimeValueLabel];
+    WNAllowValueToTruncateHorizontally(self.runtimeValueLabel);
 
     NSTextField *timeToFullLabel = [self labelWithString:@"Time to Full"
                                                     size:11
                                                   weight:NSFontWeightRegular
                                                    color:rowLabelColor];
     [self addSubview:timeToFullLabel];
+    WNPinLeftRowLabelWidth(timeToFullLabel);
 
     self.timeToFullValueLabel = [self labelWithString:@"--"
                                                  size:11
@@ -1139,12 +1299,14 @@ static NSImage *WNBrandMarkImage(BOOL onPower, BOOL charging) {
                                                 color:rowValueColor];
     self.timeToFullValueLabel.alignment = NSTextAlignmentRight;
     [self addSubview:self.timeToFullValueLabel];
+    WNAllowValueToTruncateHorizontally(self.timeToFullValueLabel);
 
     NSTextField *chargerLabel = [self labelWithString:@"Charger Profile"
                                                  size:11
                                                weight:NSFontWeightRegular
                                                 color:rowLabelColor];
     [self addSubview:chargerLabel];
+    WNPinLeftRowLabelWidth(chargerLabel);
 
     self.chargerValueLabel = [self labelWithString:@"--"
                                               size:11
@@ -1152,12 +1314,7 @@ static NSImage *WNBrandMarkImage(BOOL onPower, BOOL charging) {
                                              color:rowValueColor];
     self.chargerValueLabel.alignment = NSTextAlignmentRight;
     [self addSubview:self.chargerValueLabel];
-
-    NSTextField *monitoringLabel = [self labelWithString:@"Monitoring"
-                                                    size:11
-                                                  weight:NSFontWeightRegular
-                                                   color:rowLabelColor];
-    [self addSubview:monitoringLabel];
+    WNAllowValueToTruncateHorizontally(self.chargerValueLabel);
 
     NSView *divider = [[NSView alloc] initWithFrame:NSZeroRect];
     divider.translatesAutoresizingMaskIntoConstraints = NO;
@@ -1166,8 +1323,14 @@ static NSImage *WNBrandMarkImage(BOOL onPower, BOOL charging) {
     [self addSubview:divider];
 
     [NSLayoutConstraint activateConstraints:@[
-        [self.brandLabel.topAnchor constraintEqualToAnchor:self.topAnchor constant:16],
-        [self.brandLabel.leadingAnchor constraintEqualToAnchor:self.leadingAnchor constant:16],
+        [self.brandLabel.topAnchor constraintEqualToAnchor:self.topAnchor constant:18],
+        [self.brandLabel.leadingAnchor constraintEqualToAnchor:self.leadingAnchor constant:18],
+        [self.brandLabel.trailingAnchor constraintLessThanOrEqualToAnchor:self.closeButton.leadingAnchor constant:-10],
+
+        [self.closeButton.topAnchor constraintEqualToAnchor:self.topAnchor constant:12],
+        [self.closeButton.trailingAnchor constraintEqualToAnchor:self.trailingAnchor constant:-12],
+        [self.closeButton.widthAnchor constraintEqualToConstant:22],
+        [self.closeButton.heightAnchor constraintEqualToConstant:22],
 
         [self.wattsView.topAnchor constraintEqualToAnchor:self.brandLabel.bottomAnchor constant:18],
         [self.wattsView.leadingAnchor constraintEqualToAnchor:self.leadingAnchor constant:16],
@@ -1185,35 +1348,39 @@ static NSImage *WNBrandMarkImage(BOOL onPower, BOOL charging) {
         [self.chargerNameValueLabel.trailingAnchor constraintEqualToAnchor:self.trailingAnchor constant:-16],
         [self.chargerNameValueLabel.leadingAnchor constraintGreaterThanOrEqualToAnchor:self.chargerNameLabel.trailingAnchor constant:12],
 
-        [sourceLabel.topAnchor constraintEqualToAnchor:self.chargerNameLabel.bottomAnchor constant:10],
+        [sourceLabel.topAnchor constraintGreaterThanOrEqualToAnchor:self.chargerNameLabel.bottomAnchor constant:10],
+        [sourceLabel.topAnchor constraintGreaterThanOrEqualToAnchor:self.chargerNameValueLabel.bottomAnchor constant:10],
         [sourceLabel.leadingAnchor constraintEqualToAnchor:self.leadingAnchor constant:16],
         [self.subtitleLabel.centerYAnchor constraintEqualToAnchor:sourceLabel.centerYAnchor],
         [self.subtitleLabel.trailingAnchor constraintEqualToAnchor:self.trailingAnchor constant:-16],
         [self.subtitleLabel.leadingAnchor constraintGreaterThanOrEqualToAnchor:sourceLabel.trailingAnchor constant:12],
 
-        [self.runtimeLabel.topAnchor constraintEqualToAnchor:sourceLabel.bottomAnchor constant:10],
+        [self.runtimeLabel.topAnchor constraintGreaterThanOrEqualToAnchor:sourceLabel.bottomAnchor constant:10],
+        [self.runtimeLabel.topAnchor constraintGreaterThanOrEqualToAnchor:self.subtitleLabel.bottomAnchor constant:10],
         [self.runtimeLabel.leadingAnchor constraintEqualToAnchor:self.leadingAnchor constant:16],
         [self.runtimeValueLabel.centerYAnchor constraintEqualToAnchor:self.runtimeLabel.centerYAnchor],
         [self.runtimeValueLabel.trailingAnchor constraintEqualToAnchor:self.trailingAnchor constant:-16],
         [self.runtimeValueLabel.leadingAnchor constraintGreaterThanOrEqualToAnchor:self.runtimeLabel.trailingAnchor constant:12],
 
-        [timeToFullLabel.topAnchor constraintEqualToAnchor:self.runtimeLabel.bottomAnchor constant:10],
+        [timeToFullLabel.topAnchor constraintGreaterThanOrEqualToAnchor:self.runtimeLabel.bottomAnchor constant:10],
+        [timeToFullLabel.topAnchor constraintGreaterThanOrEqualToAnchor:self.runtimeValueLabel.bottomAnchor constant:10],
         [timeToFullLabel.leadingAnchor constraintEqualToAnchor:self.leadingAnchor constant:16],
         [self.timeToFullValueLabel.centerYAnchor constraintEqualToAnchor:timeToFullLabel.centerYAnchor],
         [self.timeToFullValueLabel.trailingAnchor constraintEqualToAnchor:self.trailingAnchor constant:-16],
         [self.timeToFullValueLabel.leadingAnchor constraintGreaterThanOrEqualToAnchor:timeToFullLabel.trailingAnchor constant:12],
 
-        [chargerLabel.topAnchor constraintEqualToAnchor:timeToFullLabel.bottomAnchor constant:10],
+        [chargerLabel.topAnchor constraintGreaterThanOrEqualToAnchor:timeToFullLabel.bottomAnchor constant:10],
+        [chargerLabel.topAnchor constraintGreaterThanOrEqualToAnchor:self.timeToFullValueLabel.bottomAnchor constant:10],
         [chargerLabel.leadingAnchor constraintEqualToAnchor:self.leadingAnchor constant:16],
         [self.chargerValueLabel.centerYAnchor constraintEqualToAnchor:chargerLabel.centerYAnchor],
         [self.chargerValueLabel.trailingAnchor constraintEqualToAnchor:self.trailingAnchor constant:-16],
         [self.chargerValueLabel.leadingAnchor constraintGreaterThanOrEqualToAnchor:chargerLabel.trailingAnchor constant:12],
+        [self.chargerValueLabel.bottomAnchor constraintEqualToAnchor:self.settingsButton.topAnchor constant:-12],
 
-        [monitoringLabel.topAnchor constraintEqualToAnchor:chargerLabel.bottomAnchor constant:10],
-        [monitoringLabel.leadingAnchor constraintEqualToAnchor:self.leadingAnchor constant:16],
-        [monitoringLabel.bottomAnchor constraintEqualToAnchor:self.bottomAnchor constant:-16],
-        [self.monitoringToggle.centerYAnchor constraintEqualToAnchor:monitoringLabel.centerYAnchor],
-        [self.monitoringToggle.trailingAnchor constraintEqualToAnchor:self.trailingAnchor constant:-16],
+        [self.settingsButton.leadingAnchor constraintEqualToAnchor:self.leadingAnchor constant:12],
+        [self.settingsButton.bottomAnchor constraintEqualToAnchor:self.bottomAnchor constant:-12],
+        [self.settingsButton.widthAnchor constraintEqualToConstant:24],
+        [self.settingsButton.heightAnchor constraintEqualToConstant:24],
     ]];
 
     return self;
@@ -1315,13 +1482,6 @@ static NSImage *WNBrandMarkImage(BOOL onPower, BOOL charging) {
     return @"--";
 }
 
-- (void)monitoringToggleChanged:(id)sender {
-    (void)sender;
-    if (self.monitoringChanged != nil) {
-        self.monitoringChanged(self.monitoringToggle.on);
-    }
-}
-
 - (void)applySnapshot:(PowerSnapshot *)snapshot monitoringEnabled:(BOOL)monitoringEnabled samples:(NSArray<NSNumber *> *)samples {
     (void)samples;
     double displayWatts = snapshot.onAC ? fabs(snapshot.watts) : -fabs(snapshot.watts);
@@ -1339,51 +1499,352 @@ static NSImage *WNBrandMarkImage(BOOL onPower, BOOL charging) {
 
     BOOL chargingPulse = snapshot.charging;
     BOOL brightPhase = (((NSInteger)(CFAbsoluteTimeGetCurrent() * 2.5)) % 2 == 0);
-    self.brandLabel.textColor = chargingPulse ? (brightPhase ? WNColor(0.11, 0.72, 0.24, 1.0) : WNColor(0.22, 0.60, 0.24, 1.0)) : WNColor(0.31, 0.25, 0.19, 1.0);
     self.brandLabel.layer.shadowColor = chargingPulse ? WNColor(0.26, 0.94, 0.42, 1.0).CGColor : NSColor.clearColor.CGColor;
     self.brandLabel.layer.shadowOpacity = chargingPulse ? (brightPhase ? 0.95 : 0.45) : 0.0;
     self.brandLabel.layer.shadowRadius = chargingPulse ? (brightPhase ? 8.0 : 4.0) : 0.0;
     self.brandLabel.layer.shadowOffset = CGSizeZero;
-
-    [self.monitoringToggle setOn:monitoringEnabled animated:NO];
+    self.brandHighlightLayer.opacity = chargingPulse ? (brightPhase ? 0.90 : 0.70) : 0.55;
 }
 
 @end
 
-@interface NotePopoverController : NSViewController
-@property(nonatomic, strong) PowerNoteView *noteView;
-@property(nonatomic, copy) void (^monitoringChanged)(BOOL enabled);
-- (void)applySnapshot:(PowerSnapshot *)snapshot monitoringEnabled:(BOOL)monitoringEnabled samples:(NSArray<NSNumber *> *)samples;
+@interface WattiSettingsPanelView : NSView
+@property(nonatomic, copy) void (^onBack)(void);
+@property(nonatomic, copy) void (^onClose)(void);
+@property(nonatomic, copy) void (^onToggleMonitoring)(void);
+@property(nonatomic, copy) void (^onQuit)(void);
+@property(nonatomic, copy) void (^onOpenSite)(void);
+@property(nonatomic, copy) void (^onEmail)(void);
+@property(nonatomic, strong) NSButton *backButton;
+@property(nonatomic, strong) NSButton *closeButton;
+@property(nonatomic, strong) NSTextField *titleLabel;
+@property(nonatomic, strong) NSTextField *aboutLabel;
+@property(nonatomic, strong) NSButton *legalButton;
+@property(nonatomic, strong) NSTextField *loginCaptionLabel;
+@property(nonatomic, strong) NSSwitch *loginSwitch;
+@property(nonatomic, strong) NSButton *monitoringButton;
+@property(nonatomic, strong) NSButton *siteButton;
+@property(nonatomic, strong) NSButton *emailButton;
+@property(nonatomic, strong) NSButton *quitButton;
 @end
 
-@implementation NotePopoverController
+@implementation WattiSettingsPanelView
+
+- (NSButton *)makeToolbarIconButton:(NSString *)symbolName tooltip:(NSString *)tooltip action:(SEL)action {
+    NSButton *button = [NSButton buttonWithTitle:@"" target:self action:action];
+    button.translatesAutoresizingMaskIntoConstraints = NO;
+    button.bordered = NO;
+    button.bezelStyle = NSBezelStyleTexturedRounded;
+    button.toolTip = tooltip;
+    button.contentTintColor = WNColor(0.30, 0.33, 0.38, 1.0);
+    NSImage *symbol = [NSImage imageWithSystemSymbolName:symbolName accessibilityDescription:tooltip];
+    if (symbol != nil) {
+        NSImageSymbolConfiguration *config = [NSImageSymbolConfiguration configurationWithPointSize:12 weight:NSFontWeightSemibold];
+        button.image = [symbol imageWithSymbolConfiguration:config] ?: symbol;
+    } else {
+        button.image = symbol;
+    }
+    return button;
+}
+
+- (NSButton *)makeRowButton:(NSString *)title action:(SEL)action {
+    NSButton *button = [NSButton buttonWithTitle:title target:self action:action];
+    button.translatesAutoresizingMaskIntoConstraints = NO;
+    button.bezelStyle = NSBezelStyleRounded;
+    button.controlSize = NSControlSizeLarge;
+    button.font = WNUIFont(12, NSFontWeightMedium);
+    return button;
+}
+
+- (instancetype)initWithFrame:(NSRect)frameRect {
+    self = [super initWithFrame:frameRect];
+    if (self == nil) {
+        return nil;
+    }
+
+    self.wantsLayer = YES;
+    self.layer.backgroundColor = WNColor(0.97, 0.975, 0.98, 1.0).CGColor;
+    self.layer.cornerRadius = 18;
+    self.layer.borderWidth = 1;
+    self.layer.borderColor = WNColor(0.0, 0.0, 0.0, 0.06).CGColor;
+
+    self.backButton = [self makeToolbarIconButton:@"chevron.left" tooltip:@"Back" action:@selector(backPressed:)];
+    [self addSubview:self.backButton];
+
+    self.closeButton = [self makeToolbarIconButton:@"xmark" tooltip:@"Close" action:@selector(closePressed:)];
+    [self addSubview:self.closeButton];
+
+    self.titleLabel = [NSTextField labelWithString:@"Settings"];
+    self.titleLabel.translatesAutoresizingMaskIntoConstraints = NO;
+    self.titleLabel.font = WNUIFont(16, NSFontWeightSemibold);
+    self.titleLabel.textColor = WNColor(0.16, 0.13, 0.11, 1.0);
+    [self addSubview:self.titleLabel];
+
+    self.aboutLabel = [NSTextField wrappingLabelWithString:@"This project is sponsored and maintained by Reif Tauati at The Good Project. Open source, dedicated to the public domain (see LICENSE)."];
+    self.aboutLabel.translatesAutoresizingMaskIntoConstraints = NO;
+    self.aboutLabel.font = WNUIFont(11, NSFontWeightRegular);
+    self.aboutLabel.textColor = WNColor(0.43, 0.47, 0.52, 1.0);
+    self.aboutLabel.maximumNumberOfLines = 6;
+    [self addSubview:self.aboutLabel];
+
+    self.legalButton = [self makeRowButton:@"Legal & disclaimer" action:@selector(legalPressed:)];
+    [self addSubview:self.legalButton];
+
+    self.loginCaptionLabel = [NSTextField labelWithString:@"Open at login"];
+    self.loginCaptionLabel.translatesAutoresizingMaskIntoConstraints = NO;
+    self.loginCaptionLabel.font = WNUIFont(12, NSFontWeightRegular);
+    self.loginCaptionLabel.textColor = WNColor(0.16, 0.13, 0.11, 1.0);
+    [self addSubview:self.loginCaptionLabel];
+
+    self.loginSwitch = [[NSSwitch alloc] initWithFrame:NSZeroRect];
+    self.loginSwitch.translatesAutoresizingMaskIntoConstraints = NO;
+    self.loginSwitch.target = self;
+    self.loginSwitch.action = @selector(loginSwitchChanged:);
+    [self.loginSwitch setState:(WNLoginItemEnabled() ? NSControlStateValueOn : NSControlStateValueOff)];
+    [self addSubview:self.loginSwitch];
+
+    self.monitoringButton = [self makeRowButton:@"Stop Monitoring" action:@selector(monitoringPressed:)];
+    [self addSubview:self.monitoringButton];
+
+    self.siteButton = [self makeRowButton:@"Visit thegoodproject.net" action:@selector(sitePressed:)];
+    [self addSubview:self.siteButton];
+
+    self.emailButton = [self makeRowButton:@"Email reif@thegoodproject.net" action:@selector(emailPressed:)];
+    [self addSubview:self.emailButton];
+
+    self.quitButton = [self makeRowButton:@"Quit Watti" action:@selector(quitPressed:)];
+    [self addSubview:self.quitButton];
+
+    [NSLayoutConstraint activateConstraints:@[
+        [self.backButton.topAnchor constraintEqualToAnchor:self.topAnchor constant:12],
+        [self.backButton.leadingAnchor constraintEqualToAnchor:self.leadingAnchor constant:12],
+        [self.backButton.widthAnchor constraintEqualToConstant:22],
+        [self.backButton.heightAnchor constraintEqualToConstant:22],
+
+        [self.closeButton.topAnchor constraintEqualToAnchor:self.topAnchor constant:12],
+        [self.closeButton.trailingAnchor constraintEqualToAnchor:self.trailingAnchor constant:-12],
+        [self.closeButton.widthAnchor constraintEqualToConstant:22],
+        [self.closeButton.heightAnchor constraintEqualToConstant:22],
+
+        [self.titleLabel.topAnchor constraintEqualToAnchor:self.backButton.bottomAnchor constant:10],
+        [self.titleLabel.leadingAnchor constraintEqualToAnchor:self.leadingAnchor constant:16],
+        [self.titleLabel.trailingAnchor constraintEqualToAnchor:self.trailingAnchor constant:-16],
+
+        [self.aboutLabel.topAnchor constraintEqualToAnchor:self.titleLabel.bottomAnchor constant:8],
+        [self.aboutLabel.leadingAnchor constraintEqualToAnchor:self.leadingAnchor constant:16],
+        [self.aboutLabel.trailingAnchor constraintEqualToAnchor:self.trailingAnchor constant:-16],
+
+        [self.legalButton.topAnchor constraintEqualToAnchor:self.aboutLabel.bottomAnchor constant:12],
+        [self.legalButton.leadingAnchor constraintEqualToAnchor:self.leadingAnchor constant:16],
+        [self.legalButton.trailingAnchor constraintEqualToAnchor:self.trailingAnchor constant:-16],
+
+        [self.loginCaptionLabel.topAnchor constraintEqualToAnchor:self.legalButton.bottomAnchor constant:12],
+        [self.loginCaptionLabel.leadingAnchor constraintEqualToAnchor:self.leadingAnchor constant:16],
+        [self.loginCaptionLabel.trailingAnchor constraintLessThanOrEqualToAnchor:self.loginSwitch.leadingAnchor constant:-12],
+
+        [self.loginSwitch.centerYAnchor constraintEqualToAnchor:self.loginCaptionLabel.centerYAnchor],
+        [self.loginSwitch.trailingAnchor constraintEqualToAnchor:self.trailingAnchor constant:-16],
+
+        [self.monitoringButton.topAnchor constraintGreaterThanOrEqualToAnchor:self.loginCaptionLabel.bottomAnchor constant:10],
+        [self.monitoringButton.topAnchor constraintGreaterThanOrEqualToAnchor:self.loginSwitch.bottomAnchor constant:10],
+        [self.monitoringButton.leadingAnchor constraintEqualToAnchor:self.leadingAnchor constant:16],
+        [self.monitoringButton.trailingAnchor constraintEqualToAnchor:self.trailingAnchor constant:-16],
+
+        [self.siteButton.topAnchor constraintEqualToAnchor:self.monitoringButton.bottomAnchor constant:8],
+        [self.siteButton.leadingAnchor constraintEqualToAnchor:self.leadingAnchor constant:16],
+        [self.siteButton.trailingAnchor constraintEqualToAnchor:self.trailingAnchor constant:-16],
+
+        [self.emailButton.topAnchor constraintEqualToAnchor:self.siteButton.bottomAnchor constant:8],
+        [self.emailButton.leadingAnchor constraintEqualToAnchor:self.leadingAnchor constant:16],
+        [self.emailButton.trailingAnchor constraintEqualToAnchor:self.trailingAnchor constant:-16],
+
+        [self.quitButton.topAnchor constraintEqualToAnchor:self.emailButton.bottomAnchor constant:12],
+        [self.quitButton.leadingAnchor constraintEqualToAnchor:self.leadingAnchor constant:16],
+        [self.quitButton.trailingAnchor constraintEqualToAnchor:self.trailingAnchor constant:-16],
+        [self.quitButton.bottomAnchor constraintEqualToAnchor:self.bottomAnchor constant:-12],
+    ]];
+
+    return self;
+}
+
+- (void)updateMonitoringButtonForMonitoringEnabled:(BOOL)enabled {
+    self.monitoringButton.title = enabled ? @"Stop Monitoring" : @"Start Monitoring";
+}
+
+- (void)refreshLoginItemSwitch {
+    [self.loginSwitch setState:(WNLoginItemEnabled() ? NSControlStateValueOn : NSControlStateValueOff)];
+}
+
+- (void)loginSwitchChanged:(id)sender {
+    (void)sender;
+    BOOL wantOn = (self.loginSwitch.state == NSControlStateValueOn);
+    if (!WNSetLoginItemEnabled(wantOn)) {
+        [self.loginSwitch setState:(wantOn ? NSControlStateValueOff : NSControlStateValueOn)];
+        NSAlert *alert = [NSAlert new];
+        alert.messageText = @"Couldn’t change “Open at login”";
+        alert.informativeText = @"Try again after dragging Watti into Applications. You can also add it manually in System Settings → General → Login Items.";
+        alert.alertStyle = NSAlertStyleInformational;
+        [alert addButtonWithTitle:@"OK"];
+        [alert runModal];
+    } else {
+        [self refreshLoginItemSwitch];
+    }
+}
+
+- (void)backPressed:(id)sender {
+    (void)sender;
+    if (self.onBack != nil) {
+        self.onBack();
+    }
+}
+
+- (void)closePressed:(id)sender {
+    (void)sender;
+    if (self.onClose != nil) {
+        self.onClose();
+    }
+}
+
+- (void)monitoringPressed:(id)sender {
+    (void)sender;
+    if (self.onToggleMonitoring != nil) {
+        self.onToggleMonitoring();
+    }
+}
+
+- (void)quitPressed:(id)sender {
+    (void)sender;
+    if (self.onQuit != nil) {
+        self.onQuit();
+    }
+}
+
+- (void)sitePressed:(id)sender {
+    (void)sender;
+    if (self.onOpenSite != nil) {
+        self.onOpenSite();
+    }
+}
+
+- (void)emailPressed:(id)sender {
+    (void)sender;
+    if (self.onEmail != nil) {
+        self.onEmail();
+    }
+}
+
+- (void)legalPressed:(id)sender {
+    (void)sender;
+    NSAlert *alert = [NSAlert new];
+    alert.messageText = @"Legal & disclaimer";
+    alert.informativeText = @"By using Watti you agree that you are using this software as-is, at your own risk, without warranty of any kind (express or implied). The authors, Reif Tauati, and The Good Project are not liable for any damages, losses, or decisions made based on information shown in this app.\n\nPower and battery readings are provided for convenience only and may be incomplete or inaccurate. This is not professional engineering, electrical, or safety advice.\n\nWatti is open source and dedicated to the public domain under the UNLICENSE (see the LICENSE file in the project).";
+    alert.alertStyle = NSAlertStyleInformational;
+    [alert addButtonWithTitle:@"OK"];
+    [alert runModal];
+}
+
+@end
+
+@interface WattiPopoverController : NSViewController
+@property(nonatomic, strong) WattiPowerView *powerView;
+@property(nonatomic, strong) WattiSettingsPanelView *settingsView;
+@property(nonatomic) BOOL lastMonitoringEnabled;
+@property(nonatomic, copy) void (^closeRequested)(void);
+@property(nonatomic, copy) void (^toggleMonitoringRequested)(void);
+@property(nonatomic, copy) void (^quitRequested)(void);
+@property(nonatomic, copy) void (^openGoodProjectRequested)(void);
+@property(nonatomic, copy) void (^emailQuestionsRequested)(void);
+- (void)applySnapshot:(PowerSnapshot *)snapshot monitoringEnabled:(BOOL)monitoringEnabled samples:(NSArray<NSNumber *> *)samples;
+- (void)showMainPanel;
+- (void)showSettingsPanel;
+@end
+
+@implementation WattiPopoverController
 
 - (void)loadView {
-    NSView *container = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 320, 284)];
+    NSView *container = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 320, 316)];
     container.wantsLayer = YES;
     container.layer.backgroundColor = WNColor(0.945, 0.952, 0.962, 1.0).CGColor;
     self.view = container;
 
-    self.noteView = [[PowerNoteView alloc] initWithFrame:NSZeroRect];
-    self.noteView.translatesAutoresizingMaskIntoConstraints = NO;
+    self.powerView = [[WattiPowerView alloc] initWithFrame:NSZeroRect];
+    self.powerView.translatesAutoresizingMaskIntoConstraints = NO;
+
+    self.settingsView = [[WattiSettingsPanelView alloc] initWithFrame:NSZeroRect];
+    self.settingsView.translatesAutoresizingMaskIntoConstraints = NO;
+    self.settingsView.hidden = YES;
+
     __weak typeof(self) weakSelf = self;
-    self.noteView.monitoringChanged = ^(BOOL enabled) {
-        if (weakSelf.monitoringChanged != nil) {
-            weakSelf.monitoringChanged(enabled);
+    self.powerView.closeRequested = ^{
+        if (weakSelf.closeRequested != nil) {
+            weakSelf.closeRequested();
         }
     };
-    [container addSubview:self.noteView];
+    self.powerView.settingsRequested = ^{
+        [weakSelf showSettingsPanel];
+    };
+
+    self.settingsView.onBack = ^{
+        [weakSelf showMainPanel];
+    };
+    self.settingsView.onClose = ^{
+        if (weakSelf.closeRequested != nil) {
+            weakSelf.closeRequested();
+        }
+    };
+    self.settingsView.onToggleMonitoring = ^{
+        if (weakSelf.toggleMonitoringRequested != nil) {
+            weakSelf.toggleMonitoringRequested();
+        }
+    };
+    self.settingsView.onQuit = ^{
+        if (weakSelf.quitRequested != nil) {
+            weakSelf.quitRequested();
+        }
+    };
+    self.settingsView.onOpenSite = ^{
+        if (weakSelf.openGoodProjectRequested != nil) {
+            weakSelf.openGoodProjectRequested();
+        }
+    };
+    self.settingsView.onEmail = ^{
+        if (weakSelf.emailQuestionsRequested != nil) {
+            weakSelf.emailQuestionsRequested();
+        }
+    };
+
+    [container addSubview:self.powerView];
+    [container addSubview:self.settingsView];
 
     [NSLayoutConstraint activateConstraints:@[
-        [self.noteView.topAnchor constraintEqualToAnchor:container.topAnchor constant:12],
-        [self.noteView.leadingAnchor constraintEqualToAnchor:container.leadingAnchor constant:12],
-        [self.noteView.trailingAnchor constraintEqualToAnchor:container.trailingAnchor constant:-12],
-        [self.noteView.bottomAnchor constraintEqualToAnchor:container.bottomAnchor constant:-12],
+        [self.powerView.topAnchor constraintEqualToAnchor:container.topAnchor constant:12],
+        [self.powerView.leadingAnchor constraintEqualToAnchor:container.leadingAnchor constant:12],
+        [self.powerView.trailingAnchor constraintEqualToAnchor:container.trailingAnchor constant:-12],
+        [self.powerView.bottomAnchor constraintEqualToAnchor:container.bottomAnchor constant:-12],
+
+        [self.settingsView.topAnchor constraintEqualToAnchor:container.topAnchor constant:12],
+        [self.settingsView.leadingAnchor constraintEqualToAnchor:container.leadingAnchor constant:12],
+        [self.settingsView.trailingAnchor constraintEqualToAnchor:container.trailingAnchor constant:-12],
+        [self.settingsView.bottomAnchor constraintEqualToAnchor:container.bottomAnchor constant:-12],
     ]];
 }
 
+- (void)showMainPanel {
+    self.powerView.hidden = NO;
+    self.settingsView.hidden = YES;
+}
+
+- (void)showSettingsPanel {
+    self.powerView.hidden = YES;
+    self.settingsView.hidden = NO;
+    [self.settingsView updateMonitoringButtonForMonitoringEnabled:self.lastMonitoringEnabled];
+    [self.settingsView refreshLoginItemSwitch];
+}
+
 - (void)applySnapshot:(PowerSnapshot *)snapshot monitoringEnabled:(BOOL)monitoringEnabled samples:(NSArray<NSNumber *> *)samples {
-    [self.noteView applySnapshot:snapshot monitoringEnabled:monitoringEnabled samples:samples];
+    self.lastMonitoringEnabled = monitoringEnabled;
+    [self.powerView applySnapshot:snapshot monitoringEnabled:monitoringEnabled samples:samples];
+    [self.settingsView updateMonitoringButtonForMonitoringEnabled:monitoringEnabled];
 }
 
 @end
@@ -1391,7 +1852,7 @@ static NSImage *WNBrandMarkImage(BOOL onPower, BOOL charging) {
 @interface AppDelegate : NSObject <NSApplicationDelegate, NSPopoverDelegate>
 @property(nonatomic, strong) NSStatusItem *statusItem;
 @property(nonatomic, strong) NSPopover *popover;
-@property(nonatomic, strong) NotePopoverController *popoverController;
+@property(nonatomic, strong) WattiPopoverController *popoverController;
 @property(nonatomic, strong) NSTimer *timer;
 @property(nonatomic, strong) NSTimer *popoverAutoCloseTimer;
 @property(nonatomic, strong) PowerSnapshot *latestSnapshot;
@@ -1536,18 +1997,48 @@ static NSImage *WNBrandMarkImage(BOOL onPower, BOOL charging) {
 }
 
 - (void)buildPopover {
-    self.popoverController = [NotePopoverController new];
+    self.popoverController = [WattiPopoverController new];
     __weak typeof(self) weakSelf = self;
-    self.popoverController.monitoringChanged = ^(BOOL enabled) {
-        [weakSelf setMonitoringEnabled:enabled reason:@"switch"];
+    self.popoverController.closeRequested = ^{
+        if (weakSelf.popover.isShown) {
+            [weakSelf.popover close];
+        }
+    };
+    self.popoverController.toggleMonitoringRequested = ^{
+        [weakSelf setMonitoringEnabled:!weakSelf.monitoringEnabled reason:@"settings_panel"];
+    };
+    self.popoverController.quitRequested = ^{
+        [weakSelf quitApp:nil];
+    };
+    self.popoverController.openGoodProjectRequested = ^{
+        [weakSelf settingsOpenGoodProject:nil];
+    };
+    self.popoverController.emailQuestionsRequested = ^{
+        [weakSelf settingsEmailQuestions:nil];
     };
     self.popover = [NSPopover new];
     self.popover.animates = YES;
     self.popover.behavior = NSPopoverBehaviorTransient;
     self.popover.delegate = self;
     self.popover.contentViewController = self.popoverController;
-    self.popover.contentSize = NSMakeSize(320, 284);
+    self.popover.contentSize = NSMakeSize(320, 316);
     WNLogLine(@"INFO", @"popover created");
+}
+
+- (void)settingsOpenGoodProject:(id)sender {
+    (void)sender;
+    NSURL *url = [NSURL URLWithString:@"https://thegoodproject.net"];
+    if (url != nil) {
+        [NSWorkspace.sharedWorkspace openURL:url];
+    }
+}
+
+- (void)settingsEmailQuestions:(id)sender {
+    (void)sender;
+    NSURL *url = [NSURL URLWithString:@"mailto:reif@thegoodproject.net?subject=Watti%20question"];
+    if (url != nil) {
+        [NSWorkspace.sharedWorkspace openURL:url];
+    }
 }
 
 - (void)refreshSnapshotTimer:(NSTimer *)timer {
@@ -1838,6 +2329,7 @@ static NSImage *WNBrandMarkImage(BOOL onPower, BOOL charging) {
         return;
     }
 
+    [self.popoverController showMainPanel];
     [self.popover showRelativeToRect:button.bounds ofView:button preferredEdge:NSRectEdgeMinY];
     [self restartPopoverAutoCloseTimer];
     WNLogLine(@"INFO", @"popover opened");
@@ -1845,6 +2337,7 @@ static NSImage *WNBrandMarkImage(BOOL onPower, BOOL charging) {
 
 - (void)popoverDidClose:(NSNotification *)notification {
     (void)notification;
+    [self.popoverController showMainPanel];
     [self.popoverAutoCloseTimer invalidate];
     self.popoverAutoCloseTimer = nil;
     WNLogLine(@"INFO", @"popover closed");
