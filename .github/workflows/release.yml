@@ -22,12 +22,15 @@ jobs:
         run: |
           codesign --force --deep --sign - "build/Watti.app"
 
-      - name: Zip app
+      - name: Zip and tar.gz app
         run: |
           ditto -c -k --sequesterRsrc --keepParent "build/Watti.app" "Watti-macos.zip"
+          tar czvf Watti-macos.tar.gz -C build Watti.app
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: Watti-macos.zip
+          files: |
+            Watti-macos.zip
+            Watti-macos.tar.gz
 
