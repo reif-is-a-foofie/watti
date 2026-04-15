@@ -22,12 +22,10 @@ jobs:
         run: |
           codesign --force --deep --sign - "build/Watti.app"
 
-      - name: Zip, tar.gz, and dmg
+      - name: Zip and tar.gz app
         run: |
           ditto -c -k --sequesterRsrc --keepParent "build/Watti.app" "Watti-macos.zip"
           tar czvf Watti-macos.tar.gz -C build Watti.app
-          ./scripts/make_dmg.sh
-          mv build/Watti.dmg Watti.dmg
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
@@ -35,5 +33,4 @@ jobs:
           files: |
             Watti-macos.zip
             Watti-macos.tar.gz
-            Watti.dmg
 
