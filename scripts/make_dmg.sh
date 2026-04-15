@@ -90,7 +90,10 @@ tell application "Finder"
 end tell
 OSA
 
-hdiutil detach "$MOUNT_POINT" >/dev/null || true
+osascript -e 'tell application "Finder" to close (every window whose name is "'"${VOL_NAME}"'")' >/dev/null 2>&1 || true
+sync
+sleep 1
+hdiutil detach "$MOUNT_POINT" >/dev/null || hdiutil detach "$MOUNT_POINT" -force >/dev/null || true
 
 rm -f "$DMG_PATH"
 hdiutil convert "$TMP_RW_DMG" -format UDZO -ov -o "$DMG_PATH" >/dev/null
