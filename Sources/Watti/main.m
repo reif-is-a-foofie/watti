@@ -135,6 +135,62 @@ static void WNAllowValueToTruncateHorizontally(NSControl *field) {
     [field setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow forOrientation:NSLayoutConstraintOrientationHorizontal];
 }
 
+static BOOL WNBundleIsInsideApplications(void) {
+    NSString *bundlePath = NSBundle.mainBundle.bundlePath ?: @"";
+    return [bundlePath hasPrefix:@"/Applications/"] || [bundlePath isEqualToString:@"/Applications/Watti.app"];
+}
+
+static void WNPromptMoveToApplicationsIfNeeded(void) {
+    if (WNBundleIsInsideApplications()) {
+        return;
+    }
+
+    NSAlert *alert = [NSAlert new];
+    alert.messageText = @"Move Watti to Applications?";
+    alert.informativeText = @"Watti works best from your Applications folder (and macOS requires it for “Open at login”).\n\nMove it now?";
+    [alert addButtonWithTitle:@"Move to Applications"];
+    [alert addButtonWithTitle:@"Not now"];
+    alert.alertStyle = NSAlertStyleInformational;
+
+    NSModalResponse response = [alert runModal];
+    if (response != NSAlertFirstButtonReturn) {
+        return;
+    }
+
+    NSURL *sourceURL = NSBundle.mainBundle.bundleURL;
+    NSURL *destURL = [NSURL fileURLWithPath:@"/Applications/Watti.app"];
+    if (sourceURL == nil || destURL == nil) {
+        return;
+    }
+
+    NSFileManager *fm = [NSFileManager defaultManager];
+    NSError *error = nil;
+
+    if ([fm fileExistsAtPath:destURL.path]) {
+        if (![fm removeItemAtURL:destURL error:&error]) {
+            NSAlert *fail = [NSAlert new];
+            fail.messageText = @"Couldn’t replace the existing Watti.app";
+            fail.informativeText = error.localizedDescription ?: @"Please delete the old copy in Applications and try again.";
+            [fail addButtonWithTitle:@"OK"];
+            [fail runModal];
+            return;
+        }
+    }
+
+    error = nil;
+    if (![fm copyItemAtURL:sourceURL toURL:destURL error:&error]) {
+        NSAlert *fail = [NSAlert new];
+        fail.messageText = @"Couldn’t move Watti to Applications";
+        fail.informativeText = error.localizedDescription ?: @"Try dragging Watti into Applications manually.";
+        [fail addButtonWithTitle:@"OK"];
+        [fail runModal];
+        return;
+    }
+
+    [[NSWorkspace sharedWorkspace] openURL:destURL];
+    [NSApp terminate:nil];
+}
+
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wdeprecated-declarations"
 
@@ -1682,7 +1738,7 @@ static NSImage *WNBrandMarkImage(BOOL onPower, BOOL charging) {
         [self.loginSwitch setState:(wantOn ? NSControlStateValueOff : NSControlStateValueOn)];
         NSAlert *alert = [NSAlert new];
         alert.messageText = @"Couldn’t change “Open at login”";
-        alert.informativeText = @"Try again after dragging Watti into Applications. You can also add it manually in System Settings → General → Login Items.";
+        alert.informativeText = @"Watti needs to be in Applications for macOS to manage login items.\n\nMove Watti into Applications, then try again. You can also add it manually in System Settings → General → Login Items.";
         alert.alertStyle = NSAlertStyleInformational;
         [alert addButtonWithTitle:@"OK"];
         [alert runModal];
@@ -1961,6 +2017,7 @@ static NSImage *WNBrandMarkImage(BOOL onPower, BOOL charging) {
     (void)notification;
 
     WNLogLine(@"INFO", @"applicationDidFinishLaunching");
+    WNPromptMoveToApplicationsIfNeeded();
     [self installSystemObservers];
     [self buildStatusItem];
     [self buildPopover];
