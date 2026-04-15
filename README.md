@@ -27,12 +27,15 @@ Sponsored by **The Good Project** — contact `reif@thegoodproject.net`.
 
 ## Install (no Terminal)
 
-1. Download **`Watti-macos.tar.gz`** — direct link to the latest release asset:  
-   https://github.com/reif-is-a-foofie/watti/releases/latest/download/Watti-macos.tar.gz  
-   (If that 404s, open [Releases](https://github.com/reif-is-a-foofie/watti/releases) and download `Watti-macos.tar.gz` from the newest version — the link works once a release includes that file.)
-2. Double-click the archive; macOS unpacks it beside the download.
-3. Drag **`Watti.app`** into **Applications**.
-4. Open it from Applications the first time (right-click → **Open** if Gatekeeper complains about an unsigned download).
+1. Download **`Watti.dmg`** (recommended):  
+   https://github.com/reif-is-a-foofie/Watti/releases/latest/download/Watti.dmg
+2. Double‑click it to open, then drag **`Watti.app`** onto **Applications**.
+3. Open **Watti** from **Applications**.
+4. If macOS blocks it, open **System Settings → Privacy & Security**, then click **Open Anyway** and try again.
+   - Quick link (may not be clickable in GitHub; copy/paste into Safari): `x-apple.systempreferences:com.apple.preference.security?Privacy`
+   - Or run in Terminal: `open "x-apple.systempreferences:com.apple.preference.security?Privacy"`
+
+Archives are also attached to each release: **`Watti-macos.zip`** and **`Watti-macos.tar.gz`**.
 
 A `.zip` of the same app is also attached to each release if you prefer that format.
 
@@ -46,5 +49,5 @@ open build/Watti.app
 
 ## GitHub Releases (macOS)
 
-Push a tag like `v1.0.0` and GitHub Actions will attach **`Watti-macos.tar.gz`** and **`Watti-macos.zip`** to the release.
+Push a tag like `v1.0.0` and GitHub Actions will attach **`Watti.dmg`**, **`Watti-macos.tar.gz`**, and **`Watti-macos.zip`** to the release.
 
