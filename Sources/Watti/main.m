@@ -1720,6 +1720,12 @@ static NSImage *WNBrandMarkImage(BOOL onPower, BOOL charging) {
 
 - (void)loginPressed:(id)sender {
     (void)sender;
+    if (!WNBundleIsInsideApplications()) {
+        WNPromptMoveToApplicationsIfNeeded();
+        [self refreshLoginItemButton];
+        return;
+    }
+
     BOOL wantOn = !WNLoginItemEnabled();
     if (!WNSetLoginItemEnabled(wantOn)) {
         NSAlert *alert = [NSAlert new];
@@ -2003,7 +2009,6 @@ static NSImage *WNBrandMarkImage(BOOL onPower, BOOL charging) {
     (void)notification;
 
     WNLogLine(@"INFO", @"applicationDidFinishLaunching");
-    WNPromptMoveToApplicationsIfNeeded();
     [self installSystemObservers];
     [self buildStatusItem];
     [self buildPopover];
