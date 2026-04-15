@@ -1576,8 +1576,7 @@ static NSImage *WNBrandMarkImage(BOOL onPower, BOOL charging) {
 @property(nonatomic, strong) NSTextField *titleLabel;
 @property(nonatomic, strong) NSTextField *aboutLabel;
 @property(nonatomic, strong) NSButton *legalButton;
-@property(nonatomic, strong) NSTextField *loginCaptionLabel;
-@property(nonatomic, strong) NSSwitch *loginSwitch;
+@property(nonatomic, strong) NSButton *loginButton;
 @property(nonatomic, strong) NSButton *monitoringButton;
 @property(nonatomic, strong) NSButton *siteButton;
 @property(nonatomic, strong) NSButton *emailButton;
@@ -1646,18 +1645,9 @@ static NSImage *WNBrandMarkImage(BOOL onPower, BOOL charging) {
     self.legalButton = [self makeRowButton:@"Legal & disclaimer" action:@selector(legalPressed:)];
     [self addSubview:self.legalButton];
 
-    self.loginCaptionLabel = [NSTextField labelWithString:@"Open at login"];
-    self.loginCaptionLabel.translatesAutoresizingMaskIntoConstraints = NO;
-    self.loginCaptionLabel.font = WNUIFont(12, NSFontWeightRegular);
-    self.loginCaptionLabel.textColor = WNColor(0.16, 0.13, 0.11, 1.0);
-    [self addSubview:self.loginCaptionLabel];
-
-    self.loginSwitch = [[NSSwitch alloc] initWithFrame:NSZeroRect];
-    self.loginSwitch.translatesAutoresizingMaskIntoConstraints = NO;
-    self.loginSwitch.target = self;
-    self.loginSwitch.action = @selector(loginSwitchChanged:);
-    [self.loginSwitch setState:(WNLoginItemEnabled() ? NSControlStateValueOn : NSControlStateValueOff)];
-    [self addSubview:self.loginSwitch];
+    self.loginButton = [self makeRowButton:@"" action:@selector(loginPressed:)];
+    [self addSubview:self.loginButton];
+    [self refreshLoginItemButton];
 
     self.monitoringButton = [self makeRowButton:@"Stop Monitoring" action:@selector(monitoringPressed:)];
     [self addSubview:self.monitoringButton];
@@ -1694,15 +1684,11 @@ static NSImage *WNBrandMarkImage(BOOL onPower, BOOL charging) {
         [self.legalButton.leadingAnchor constraintEqualToAnchor:self.leadingAnchor constant:16],
         [self.legalButton.trailingAnchor constraintEqualToAnchor:self.trailingAnchor constant:-16],
 
-        [self.loginCaptionLabel.topAnchor constraintEqualToAnchor:self.legalButton.bottomAnchor constant:12],
-        [self.loginCaptionLabel.leadingAnchor constraintEqualToAnchor:self.leadingAnchor constant:16],
-        [self.loginCaptionLabel.trailingAnchor constraintLessThanOrEqualToAnchor:self.loginSwitch.leadingAnchor constant:-12],
+        [self.loginButton.topAnchor constraintEqualToAnchor:self.legalButton.bottomAnchor constant:12],
+        [self.loginButton.leadingAnchor constraintEqualToAnchor:self.leadingAnchor constant:16],
+        [self.loginButton.trailingAnchor constraintEqualToAnchor:self.trailingAnchor constant:-16],
 
-        [self.loginSwitch.centerYAnchor constraintEqualToAnchor:self.loginCaptionLabel.centerYAnchor],
-        [self.loginSwitch.trailingAnchor constraintEqualToAnchor:self.trailingAnchor constant:-16],
-
-        [self.monitoringButton.topAnchor constraintGreaterThanOrEqualToAnchor:self.loginCaptionLabel.bottomAnchor constant:10],
-        [self.monitoringButton.topAnchor constraintGreaterThanOrEqualToAnchor:self.loginSwitch.bottomAnchor constant:10],
+        [self.monitoringButton.topAnchor constraintEqualToAnchor:self.loginButton.bottomAnchor constant:10],
         [self.monitoringButton.leadingAnchor constraintEqualToAnchor:self.leadingAnchor constant:16],
         [self.monitoringButton.trailingAnchor constraintEqualToAnchor:self.trailingAnchor constant:-16],
 
@@ -1727,15 +1713,15 @@ static NSImage *WNBrandMarkImage(BOOL onPower, BOOL charging) {
     self.monitoringButton.title = enabled ? @"Stop Monitoring" : @"Start Monitoring";
 }
 
-- (void)refreshLoginItemSwitch {
-    [self.loginSwitch setState:(WNLoginItemEnabled() ? NSControlStateValueOn : NSControlStateValueOff)];
+- (void)refreshLoginItemButton {
+    BOOL enabled = WNLoginItemEnabled();
+    self.loginButton.title = enabled ? @"Open at login: On" : @"Open at login: Off";
 }
 
-- (void)loginSwitchChanged:(id)sender {
+- (void)loginPressed:(id)sender {
     (void)sender;
-    BOOL wantOn = (self.loginSwitch.state == NSControlStateValueOn);
+    BOOL wantOn = !WNLoginItemEnabled();
     if (!WNSetLoginItemEnabled(wantOn)) {
-        [self.loginSwitch setState:(wantOn ? NSControlStateValueOff : NSControlStateValueOn)];
         NSAlert *alert = [NSAlert new];
         alert.messageText = @"Couldn’t change “Open at login”";
         alert.informativeText = @"Watti needs to be in Applications for macOS to manage login items.\n\nMove Watti into Applications, then try again. You can also add it manually in System Settings → General → Login Items.";
@@ -1743,7 +1729,7 @@ static NSImage *WNBrandMarkImage(BOOL onPower, BOOL charging) {
         [alert addButtonWithTitle:@"OK"];
         [alert runModal];
     } else {
-        [self refreshLoginItemSwitch];
+        [self refreshLoginItemButton];
     }
 }
 
@@ -1894,7 +1880,7 @@ static NSImage *WNBrandMarkImage(BOOL onPower, BOOL charging) {
     self.powerView.hidden = YES;
     self.settingsView.hidden = NO;
     [self.settingsView updateMonitoringButtonForMonitoringEnabled:self.lastMonitoringEnabled];
-    [self.settingsView refreshLoginItemSwitch];
+    [self.settingsView refreshLoginItemButton];
 }
 
 - (void)applySnapshot:(PowerSnapshot *)snapshot monitoringEnabled:(BOOL)monitoringEnabled samples:(NSArray<NSNumber *> *)samples {
