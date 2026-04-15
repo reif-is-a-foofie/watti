@@ -94,7 +94,11 @@ Sponsored by **The Good Project** — contact `reif@thegoodproject.net`.
 1. Download **`Watti.dmg`** from [Releases](https://github.com/reif-is-a-foofie/Watti/releases).
 2. Double‑click it to open.
 3. Drag **`Watti.app`** onto **Applications** in the window that appears.
-4. Open Watti from Applications the first time (right-click → **Open** if Gatekeeper complains about an unsigned download).
+4. Open Watti from Applications the first time.
+
+If macOS blocks it, go to **System Settings → Privacy & Security** and click **Open Anyway**.
+
+![System Settings → Privacy & Security → Open Anyway](Assets/macos-not-supported.png)
 
 ### Alternative (archive)
 
