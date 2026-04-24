@@ -715,6 +715,105 @@ static PowerSnapshot *WNSnapshot(void) {
     return snapshot;
 }
 
+static BOOL WNIsRoughlyEqual(double a, double b, double tolerance) {
+    return fabs(a - b) <= tolerance;
+}
+
+static double WNIncomingWattsForSnapshot(PowerSnapshot *snapshot) {
+    if (snapshot == nil) {
+        return 0;
+    }
+
+    if (snapshot.inputWatts > 0) {
+        return snapshot.inputWatts;
+    }
+
+    if ([snapshot.source isEqualToString:@"battery_assist"] && snapshot.watts > 0) {
+        return 0;
+    }
+
+    if (snapshot.onAC && snapshot.watts > 0) {
+        return snapshot.watts;
+    }
+
+    return 0;
+}
+
+static double WNCurrentUseWattsForSnapshot(PowerSnapshot *snapshot) {
+    if (snapshot == nil) {
+        return 0;
+    }
+
+    if (snapshot.systemLoadWatts > 0) {
+        return snapshot.systemLoadWatts;
+    }
+
+    if ([snapshot.source isEqualToString:@"battery_assist"] && snapshot.watts > 0) {
+        return snapshot.inputWatts > 0 ? snapshot.inputWatts + snapshot.watts : snapshot.watts;
+    }
+
+    if (!snapshot.onAC && snapshot.watts > 0) {
+        return snapshot.watts;
+    }
+
+    if (snapshot.onAC && snapshot.watts > 0) {
+        double incomingWatts = WNIncomingWattsForSnapshot(snapshot);
+        if (incomingWatts > 0 && !WNIsRoughlyEqual(incomingWatts, snapshot.watts, 0.75)) {
+            return snapshot.watts;
+        }
+    }
+
+    return 0;
+}
+
+static double WNNetWattsForSnapshot(PowerSnapshot *snapshot) {
+    if (snapshot == nil) {
+        return 0;
+    }
+
+    double incomingWatts = WNIncomingWattsForSnapshot(snapshot);
+    double currentUseWatts = WNCurrentUseWattsForSnapshot(snapshot);
+    if (incomingWatts > 0 && currentUseWatts > 0) {
+        return incomingWatts - currentUseWatts;
+    }
+
+    if ([snapshot.source isEqualToString:@"battery_assist"] && snapshot.watts > 0) {
+        return -fabs(snapshot.watts);
+    }
+
+    if (snapshot.onAC) {
+        return fabs(snapshot.watts);
+    }
+
+    return -fabs(snapshot.watts);
+}
+
+static BOOL WNIsLikelyChargingFromPowerFlow(PowerSnapshot *snapshot) {
+    if (snapshot == nil || !snapshot.onAC) {
+        return NO;
+    }
+
+    if ([snapshot.source isEqualToString:@"battery_assist"]) {
+        return NO;
+    }
+
+    if (snapshot.fullyCharged) {
+        return NO;
+    }
+
+    if (snapshot.charging) {
+        return YES;
+    }
+
+    double incomingWatts = WNIncomingWattsForSnapshot(snapshot);
+    double currentUseWatts = WNCurrentUseWattsForSnapshot(snapshot);
+    if (incomingWatts > 0 && currentUseWatts > 0) {
+        return incomingWatts > currentUseWatts + 0.25;
+    }
+
+    return NO;
+}
+
 static NSImage *WNStatusImage(BOOL onPower) {
     NSImage *symbol = [NSImage imageWithSystemSymbolName:@"bolt.fill" accessibilityDescription:@"Watti"];
     if (symbol == nil) {
@@ -1301,7 +1400,7 @@ static NSImage *WNBrandMarkImage(BOOL onPower, BOOL charging) {
     [self addSubview:self.timeToFullValueLabel];
     WNAllowValueToTruncateHorizontally(self.timeToFullValueLabel);
 
-    NSTextField *chargerLabel = [self labelWithString:@"Charger Profile"
+    NSTextField *chargerLabel = [self labelWithString:@"Power Flow"
                                                  size:11
                                                weight:NSFontWeightRegular
                                                 color:rowLabelColor];
@@ -1398,6 +1497,20 @@ static NSImage *WNBrandMarkImage(BOOL onPower, BOOL charging) {
 - (NSString *)detailTextForSnapshot:(PowerSnapshot *)snapshot {
     NSMutableArray<NSString *> *parts = [NSMutableArray array];
 
+    double incomingWatts = WNIncomingWattsForSnapshot(snapshot);
+    double currentUseWatts = WNCurrentUseWattsForSnapshot(snapshot);
+    if (incomingWatts > 0) {
+        [parts addObject:[NSString stringWithFormat:@"In %.1f W", incomingWatts]];
+    }
+
+    if (currentUseWatts > 0) {
+        [parts addObject:[NSString stringWithFormat:@"Use %.1f W", currentUseWatts]];
+    }
+
+    if (parts.count > 0) {
+        return [parts componentsJoinedByString:@" / "];
+    }
+
     if (snapshot.adapterRatedWatts > 0) {
         [parts addObject:[NSString stringWithFormat:@"%.0f W rated", snapshot.adapterRatedWatts]];
     }
@@ -1441,6 +1554,10 @@ static NSImage *WNBrandMarkImage(BOOL onPower, BOOL charging) {
         return [NSString stringWithFormat:@"AC + Battery%@", batteryPart];
     }
 
+    if (WNIsLikelyChargingFromPowerFlow(snapshot)) {
+        return [NSString stringWithFormat:@"Charging%@", batteryPart];
+    }
+
     return [NSString stringWithFormat:@"AC Charger%@", batteryPart];
 }
 
@@ -1467,7 +1584,7 @@ static NSImage *WNBrandMarkImage(BOOL onPower, BOOL charging) {
         return WNDurationString(snapshot.systemTimeToFullMinutes);
     }
 
-    if (snapshot.onAC && snapshot.charging) {
+    if (snapshot.onAC && (snapshot.charging || WNIsLikelyChargingFromPowerFlow(snapshot))) {
         return @"Charging";
     }
 
@@ -1480,8 +1597,7 @@ static NSImage *WNBrandMarkImage(BOOL onPower, BOOL charging) {
 
 - (void)applySnapshot:(PowerSnapshot *)snapshot monitoringEnabled:(BOOL)monitoringEnabled samples:(NSArray<NSNumber *> *)samples {
     (void)samples;
-    double displayWatts = snapshot.onAC ? fabs(snapshot.watts) : -fabs(snapshot.watts);
-    [self.wattsView setWatts:displayWatts];
+    [self.wattsView setWatts:WNNetWattsForSnapshot(snapshot)];
     NSString *headline = snapshot.chargerDisplayName.length > 0 ? snapshot.chargerDisplayName : (snapshot.onAC ? @"Charger Setup" : @"Battery Power");
     self.chargerNameValueLabel.stringValue = headline.length > 0 ? headline : @"--";
     self.subtitleLabel.stringValue = monitoringEnabled ? [self powerSourceTextForSnapshot:snapshot] : @"Monitoring Paused";
@@ -1493,7 +1609,7 @@ static NSImage *WNBrandMarkImage(BOOL onPower, BOOL charging) {
     self.timeToFullValueLabel.stringValue = [self timeToFullTextForSnapshot:snapshot];
     self.chargerValueLabel.stringValue = [self detailTextForSnapshot:snapshot];
 
-    BOOL chargingPulse = snapshot.charging;
+    BOOL chargingPulse = snapshot.charging || WNIsLikelyChargingFromPowerFlow(snapshot);
     BOOL brightPhase = (((NSInteger)(CFAbsoluteTimeGetCurrent() * 2.5)) % 2 == 0);
     self.brandLabel.layer.shadowColor = chargingPulse ? WNColor(0.26, 0.94, 0.42, 1.0).CGColor : NSColor.clearColor.CGColor;
     self.brandLabel.layer.shadowOpacity = chargingPulse ? (brightPhase ? 0.95 : 0.45) : 0.0;
@@ -2181,12 +2297,20 @@ static NSImage *WNBrandMarkImage(BOOL onPower, BOOL charging) {
     if (!self.monitoringEnabled) {
         title = @"off";
     } else {
-        double displayWatts = snapshot.onAC ? fabs(snapshot.watts) : -fabs(snapshot.watts);
-        title = [NSString stringWithFormat:@"%+.1fW", displayWatts];
+        title = [NSString stringWithFormat:@"%+.1fW", WNNetWattsForSnapshot(snapshot)];
     }
 
     button.attributedTitle = WNStatusItemTitle(self.monitoringEnabled && snapshot.onAC, title);
-    button.toolTip = self.monitoringEnabled ? [NSString stringWithFormat:@"%@\n%@", snapshot.subtitle, snapshot.caption] : @"Monitoring off";
+    if (self.monitoringEnabled) {
+        double incomingWatts = WNIncomingWattsForSnapshot(snapshot);
+        double currentUseWatts = WNCurrentUseWattsForSnapshot(snapshot);
+        button.toolTip = [NSString stringWithFormat:@"Net %.1f W\nIn %.1f W / Use %.1f W",
+                                                    WNNetWattsForSnapshot(snapshot),
+                                                    incomingWatts,
+                                                    currentUseWatts];
+    } else {
+        button.toolTip = @"Monitoring off";
+    }
 }
 
 - (void)maybeLogSnapshot:(PowerSnapshot *)snapshot reason:(NSString *)reason {
@@ -2218,9 +2342,10 @@ static NSImage *WNBrandMarkImage(BOOL onPower, BOOL charging) {
         return;
     }
 
-    WNLogLine(@"POWER", [NSString stringWithFormat:@"%@ watts=%.1f input=%.1f system=%.1f avg=%.1f runtime=%.0fm battery=%.0f%% health=%.0f%% rated=%.1f negotiated=%.1f charger=%@ source=%@ onAC=%@ powerState=%@ externalHint=%@ subtitle=%@ caption=%@",
+    WNLogLine(@"POWER", [NSString stringWithFormat:@"%@ watts=%.1f net=%.1f input=%.1f system=%.1f avg=%.1f runtime=%.0fm battery=%.0f%% health=%.0f%% rated=%.1f negotiated=%.1f charger=%@ source=%@ onAC=%@ powerState=%@ externalHint=%@ subtitle=%@ caption=%@",
                                                    reason,
                                                    snapshot.watts,
+                                                   WNNetWattsForSnapshot(snapshot),
                                                    snapshot.inputWatts,
                                                    snapshot.systemLoadWatts,
                                                    snapshot.averageUsageWatts,
